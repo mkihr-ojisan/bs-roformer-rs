@@ -28,7 +28,7 @@ fn identity_process_reconstructs_the_mix() {
         chunk_size * 3 + chunk_size / 4,
     ] {
         let mix = [ramp_signal(length, 0.001), ramp_signal(length, -0.002)];
-        let stems = demix(&mix, chunk_size, 1, identity).unwrap();
+        let stems = demix(&mix, chunk_size, 1, identity, |_| {}).unwrap();
         assert_eq!(stems.len(), 1);
         for (output, expected) in stems[0].iter().zip(&mix) {
             assert_eq!(output.len(), length);
@@ -49,10 +49,16 @@ fn chunks_starting_in_the_trailing_padding_are_skipped() {
     let length = 3 * chunk_size;
     let mix = [ramp_signal(length, 0.001), ramp_signal(length, -0.002)];
     let mut call_count = 0;
-    demix(&mix, chunk_size, 1, |chunk, output| {
-        call_count += 1;
-        identity(chunk, output)
-    })
+    demix(
+        &mix,
+        chunk_size,
+        1,
+        |chunk, output| {
+            call_count += 1;
+            identity(chunk, output)
+        },
+        |_| {},
+    )
     .unwrap();
     assert_eq!(call_count, 7);
 }
@@ -61,12 +67,71 @@ fn chunks_starting_in_the_trailing_padding_are_skipped() {
 #[test]
 fn non_finite_output_is_an_error() {
     let mix = [vec![0.0; 1000], vec![0.0; 1000]];
-    let result = demix(&mix, 2048, 1, |chunk, output| {
-        identity(chunk, output)?;
-        output[0] = f32::NAN;
-        Ok(())
-    });
+    let result = demix(
+        &mix,
+        2048,
+        1,
+        |chunk, output| {
+            identity(chunk, output)?;
+            output[0] = f32::NAN;
+            Ok(())
+        },
+        |_| {},
+    );
     assert!(matches!(result, Err(Error::NonFiniteOutput)));
+}
+
+/// 進捗がチャンクごとに処理済みの割合として通知され、最後に 1.0 になることを、パディングする長さ
+/// （7 チャンクに分割）とパディングしない長さ（1 チャンクに分割）で確認する。
+#[test]
+fn progress_is_reported_after_each_chunk() {
+    let chunk_size = 2048;
+    for (length, chunk_count) in [(3 * chunk_size, 7), (1000, 1)] {
+        let mix = [ramp_signal(length, 0.001), ramp_signal(length, -0.002)];
+        let mut progress = Vec::new();
+        demix(&mix, chunk_size, 1, identity, |value| progress.push(value)).unwrap();
+        let expected: Vec<_> = (1..=chunk_count)
+            .map(|index| index as f32 / chunk_count as f32)
+            .collect();
+        assert_eq!(progress, expected, "length {length}");
+        assert_eq!(progress.last(), Some(&1.0));
+    }
+}
+
+/// 入力が空のときは、進捗が 1.0 で 1 回だけ通知されることを確認する。
+#[test]
+fn progress_of_empty_mix_is_reported_once() {
+    let mix = [Vec::new(), Vec::new()];
+    let mut progress = Vec::new();
+    demix(&mix, 2048, 1, identity, |value| progress.push(value)).unwrap();
+    assert_eq!(progress, [1.0]);
+}
+
+/// エラーの原因となったチャンク以降では進捗が通知されないことを、2 番目のチャンクの出力に NaN を
+/// 含めて確認する。
+#[test]
+fn progress_stops_at_the_failing_chunk() {
+    let chunk_size = 2048;
+    let length = 3 * chunk_size;
+    let mix = [ramp_signal(length, 0.001), ramp_signal(length, -0.002)];
+    let mut call_count = 0;
+    let mut progress = Vec::new();
+    let result = demix(
+        &mix,
+        chunk_size,
+        1,
+        |chunk, output| {
+            call_count += 1;
+            identity(chunk, output)?;
+            if call_count == 2 {
+                output[0] = f32::NAN;
+            }
+            Ok(())
+        },
+        |value| progress.push(value),
+    );
+    assert!(matches!(result, Err(Error::NonFiniteOutput)));
+    assert_eq!(progress, [1.0 / 7.0]);
 }
 
 /// フェードが線形で、窓の中央の値が 1 となることを確認する。

@@ -15,6 +15,10 @@ mod tests;
 /// - `stem_count`: パート数
 /// - `process`: `chunk_size` サンプルの波形を受け取り、`[パート, チャンネル, サンプル]` の順の波形を
 ///   第 2 引数（要素数は `stem_count * CHANNEL_COUNT * chunk_size`）へ出力する関数
+/// - `on_progress`: 処理済みのチャンクの割合（0 より大きく 1 以下）を受け取る関数。チャンクの処理が
+///   完了するたびに、前回より大きい値で呼ばれる。成功した場合、最後の呼び出しの値は 1.0 である。
+///   処理するチャンクがない（`mix` が空の）場合は、1.0 で 1 回だけ呼ばれる。エラーを返す場合は、
+///   エラーの原因となったチャンク以降では呼ばれない。
 ///
 /// # 戻り値
 ///
@@ -25,6 +29,7 @@ pub fn demix(
     chunk_size: usize,
     stem_count: usize,
     mut process: impl FnMut(&[Vec<f32>; CHANNEL_COUNT], &mut [f32]) -> Result<()>,
+    mut on_progress: impl FnMut(f32),
 ) -> Result<Vec<[Vec<f32>; CHANNEL_COUNT]>> {
     let fade_size = chunk_size / 10;
     let step = chunk_size / 2;
@@ -56,8 +61,9 @@ pub fn demix(
     } else {
         total_length
     };
-    let mut start = 0;
-    while start < output_end {
+    let chunk_count = output_end.div_ceil(step);
+    for chunk_index in 0..chunk_count {
+        let start = chunk_index * step;
         let segment_length = chunk_size.min(total_length - start);
         for (target, source) in chunk.iter_mut().zip(&signal) {
             fill_chunk(target, &source[start..start + segment_length]);
@@ -90,7 +96,11 @@ pub fn demix(
             *value += weight;
         }
 
-        start += step;
+        // 最後のチャンクでは分子と分母が等しいので、値はちょうど 1.0 になる。
+        on_progress((chunk_index + 1) as f32 / chunk_count as f32);
+    }
+    if chunk_count == 0 {
+        on_progress(1.0);
     }
 
     for channels in &mut stems {

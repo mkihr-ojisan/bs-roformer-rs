@@ -83,15 +83,40 @@ impl Separator {
     ///
     /// [`Stem::ALL`] の順序で、入力と同じ長さのパートを返す。
     pub fn separate(&self, mix: &[Vec<f32>; CHANNEL_COUNT]) -> Result<Vec<SeparatedStem>> {
+        self.separate_with_progress(mix, |_| {})
+    }
+
+    /// 44.1 kHz ステレオの音声をパートに分離し、進捗を通知する。
+    ///
+    /// # 引数
+    ///
+    /// - `mix`: チャンネルごとのサンプル列。2 チャンネルの長さは一致していなければならない。
+    /// - `on_progress`: 処理済みのチャンクの割合（0 より大きく 1 以下）を受け取る関数。
+    ///   チャンクの処理が完了するたびに、`separate_with_progress` を呼び出したスレッド上で、前回より
+    ///   大きい値を渡して呼ばれる。成功した場合、最後の呼び出しの値は 1.0 である。`mix` が空の場合は
+    ///   1.0 で 1 回だけ呼ばれる。エラーを返す場合は、エラーの原因となったチャンク以降では呼ばれない。
+    ///
+    /// # 戻り値
+    ///
+    /// [`Stem::ALL`] の順序で、入力と同じ長さのパートを返す。
+    pub fn separate_with_progress(
+        &self,
+        mix: &[Vec<f32>; CHANNEL_COUNT],
+        on_progress: impl FnMut(f32),
+    ) -> Result<Vec<SeparatedStem>> {
         assert_eq!(
             mix[0].len(),
             mix[1].len(),
             "both channels must have the same length"
         );
 
-        let stems = demix(mix, self.chunk_size, Stem::ALL.len(), |chunk, output| {
-            self.separate_chunk(chunk, output)
-        })?;
+        let stems = demix(
+            mix,
+            self.chunk_size,
+            Stem::ALL.len(),
+            |chunk, output| self.separate_chunk(chunk, output),
+            on_progress,
+        )?;
         Ok(Stem::ALL
             .into_iter()
             .zip(stems)
