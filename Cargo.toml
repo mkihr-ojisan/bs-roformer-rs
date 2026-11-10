@@ -7,6 +7,7 @@ license = "MIT"
 [features]
 flex = ["burn/flex"]
 cuda = ["burn/cuda", "burn/fusion", "burn/autotune", "burn/persistence"]
+rocm = ["burn/rocm", "burn/fusion", "burn/autotune", "burn/persistence"]
 
 [dependencies]
 burn = { version = "0.22.1", default-features = false, features = ["std", "pytorch"] }
